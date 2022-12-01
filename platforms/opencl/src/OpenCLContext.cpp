@@ -79,7 +79,7 @@ static bool isSupported(cl::Platform platform) {
 
 OpenCLContext::OpenCLContext(const System& system, int platformIndex, int deviceIndex, const string& precision, OpenCLPlatform::PlatformData& platformData, OpenCLContext* originalContext) :
         ComputeContext(system), platformData(platformData), numForceBuffers(0), hasAssignedPosqCharges(false),
-        integration(NULL), expression(NULL), bonded(NULL), nonbonded(NULL) {
+        integration(NULL), expression(NULL), bonded(NULL), nonbonded(NULL), pinnedBuffer(NULL) {
     if (precision == "single") {
         useDoublePrecision = false;
         useMixedPrecision = false;
@@ -496,8 +496,6 @@ OpenCLContext::~OpenCLContext() {
 void OpenCLContext::initialize() {
     bonded->initialize(system);
     numForceBuffers = std::max(numForceBuffers, (int) platformData.contexts.size());
-    numForceBuffers = std::max(numForceBuffers, bonded->getNumForceBuffers());
-    numForceBuffers = std::max(numForceBuffers, nonbonded->getNumForceBuffers());
     int energyBufferSize = max(numThreadBlocks*ThreadBlockSize, nonbonded->getNumEnergyBuffers());
     if (useDoublePrecision) {
         forceBuffers.initialize<mm_double4>(*this, paddedNumAtoms*numForceBuffers, "forceBuffers");

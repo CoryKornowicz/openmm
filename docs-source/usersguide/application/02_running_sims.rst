@@ -505,6 +505,8 @@ File                                 Parameters
 :file:`amber14/tip4pew.xml`          TIP4P-Ew water model\ :cite:`Horn2004` and ions
 :file:`amber14/tip4pfb.xml`          TIP4P-FB water model\ :cite:`Wang2014` and ions
 :file:`amber14/spce.xml`             SPC/E water model\ :cite:`Berendsen1987` and ions
+:code:`amber14/opc.xml`              OPC water model\ :cite:`Izadi2014` and ions
+:code:`amber14/opc3.xml`             OPC3 water model\ :cite:`Izadi2016` and ions
 ===================================  ============================================
 
 As a convenience, the file :file:`amber14-all.xml` can be used as a shortcut to include
@@ -756,6 +758,8 @@ File                 Water Model
 :code:`tip5p.xml`    TIP5P water model\ :cite:`Mahoney2000`
 :code:`spce.xml`     SPC/E water model\ :cite:`Berendsen1987`
 :code:`swm4ndp.xml`  SWM4-NDP water model\ :cite:`Lamoureux2006`
+:code:`opc.xml`      OPC water model\ :cite:`Izadi2014`
+:code:`opc3.xml`     OPC3 water model\ :cite:`Izadi2016`
 ===================  ============================================
 
 Small molecule parameters
