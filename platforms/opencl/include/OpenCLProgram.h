@@ -44,7 +44,7 @@ public:
      * @param context      the context this kernel belongs to
      * @param program      the compiled program
      */
-    OpenCLProgram(OpenCLContext& context, cl::Program program);
+    OpenCLProgram(OpenCLContext& context, MTL::Library* program);
     /**
      * Create a ComputeKernel for one of the kernels in this program.
      * 
@@ -53,7 +53,7 @@ public:
     ComputeKernel createKernel(const std::string& name);
 private:
     OpenCLContext& context;
-    cl::Program program;
+    NS::SharedPtr<MTL::Library> program;
 };
 
 } // namespace OpenMM

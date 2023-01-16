@@ -65,7 +65,7 @@ FOREACH(subdir ${OPENMM_SOURCE_SUBDIRS})
     FILE(GLOB incl_files ${CMAKE_CURRENT_SOURCE_DIR}/${subdir}/src/*.h)
     SET(SOURCE_FILES         ${SOURCE_FILES}         ${src_files})   #append
     IF(MSVC)
-         FILE(GLOB_RECURSE kernel_files ${CMAKE_CURRENT_SOURCE_DIR}/${subdir}/src/kernels/*.cl)
+         FILE(GLOB_RECURSE kernel_files ${CMAKE_CURRENT_SOURCE_DIR}/${subdir}/src/kernels/*.metal)
          SET(SOURCE_FILES ${SOURCE_FILES} ${kernel_files})
     ENDIF(MSVC)
     SET(SOURCE_INCLUDE_FILES ${SOURCE_INCLUDE_FILES} ${incl_files})

@@ -31,10 +31,24 @@ using namespace OpenMM;
 OpenCLEvent::OpenCLEvent(OpenCLContext& context) : context(context) {
 }
 
+OpenCLEvent::~OpenCLEvent() {
+    if (semaphoreExists) {
+        wait();
+    }
+}
+
 void OpenCLEvent::enqueue() {
-    context.getQueue().enqueueMarkerWithWaitList(NULL, &event);
+    if (semaphoreExists) {
+        wait();
+    }
+    semaphore = context.createSemaphoreAndFlush();
+    semaphoreExists = true;
 }
 
 void OpenCLEvent::wait() {
-    event.wait();
+    if (!semaphoreExists)
+        throw OpenMMException("Waited on event that wasn't enqueued.");
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+    dispatch_release(semaphore);
+    semaphoreExists = false;
 }

@@ -46,14 +46,14 @@
 using namespace OpenMM;
 using namespace std;
 
-static void setPeriodicBoxSizeArg(OpenCLContext& cl, cl::Kernel& kernel, int index) {
+static void setPeriodicBoxSizeArg(OpenCLContext& cl, OpenCLKernel& kernel, int index) {
     if (cl.getUseDoublePrecision())
         kernel.setArg<mm_double4>(index, cl.getPeriodicBoxSizeDouble());
     else
         kernel.setArg<mm_float4>(index, cl.getPeriodicBoxSize());
 }
 
-static void setPeriodicBoxArgs(OpenCLContext& cl, cl::Kernel& kernel, int index) {
+static void setPeriodicBoxArgs(OpenCLContext& cl, OpenCLKernel& kernel, int index) {
     if (cl.getUseDoublePrecision()) {
         kernel.setArg<mm_double4>(index++, cl.getPeriodicBoxSizeDouble());
         kernel.setArg<mm_double4>(index++, cl.getInvPeriodicBoxSizeDouble());
@@ -478,9 +478,9 @@ private:
 
 class OpenCLCalcNonbondedForceKernel::PmeIO : public CalcPmeReciprocalForceKernel::IO {
 public:
-    PmeIO(OpenCLContext& cl, cl::Kernel addForcesKernel) : cl(cl), addForcesKernel(addForcesKernel) {
+    PmeIO(OpenCLContext& cl, OpenCLKernel addForcesKernel) : cl(cl), addForcesKernel(addForcesKernel) {
         forceTemp.initialize<mm_float4>(cl, cl.getNumAtoms(), "PmeForce");
-        addForcesKernel.setArg<cl::Buffer>(0, forceTemp.getDeviceBuffer());
+        addForcesKernel.setArg<MTL::Buffer>(0, forceTemp.getDeviceBuffer());
     }
     float* getPosq() {
         cl.getPosq().download(posq);
@@ -488,14 +488,14 @@ public:
     }
     void setForce(float* force) {
         forceTemp.upload(force);
-        addForcesKernel.setArg<cl::Buffer>(1, cl.getLongForceBuffer().getDeviceBuffer());
+        addForcesKernel.setArg<MTL::Buffer>(1, cl.getLongForceBuffer().getDeviceBuffer());
         cl.executeKernel(addForcesKernel, cl.getNumAtoms());
     }
 private:
     OpenCLContext& cl;
     vector<mm_float4> posq;
     OpenCLArray forceTemp;
-    cl::Kernel addForcesKernel;
+    OpenCLKernel addForcesKernel;
 };
 
 class OpenCLCalcNonbondedForceKernel::PmePreComputation : public OpenCLContext::ForcePreComputation {
@@ -546,10 +546,10 @@ public:
     SyncQueuePostComputation(OpenCLContext& cl, cl::Event& event, OpenCLArray& pmeEnergyBuffer, int forceGroup) : cl(cl), event(event),
             pmeEnergyBuffer(pmeEnergyBuffer), forceGroup(forceGroup) {
     }
-    void setKernel(cl::Kernel kernel) {
+    void setKernel(OpenCLKernel kernel) {
         addEnergyKernel = kernel;
-        addEnergyKernel.setArg<cl::Buffer>(0, pmeEnergyBuffer.getDeviceBuffer());
-        addEnergyKernel.setArg<cl::Buffer>(1, cl.getEnergyBuffer().getDeviceBuffer());
+        addEnergyKernel.setArg<MTL::Buffer>(0, pmeEnergyBuffer.getDeviceBuffer());
+        addEnergyKernel.setArg<MTL::Buffer>(1, cl.getEnergyBuffer().getDeviceBuffer());
         addEnergyKernel.setArg<cl_int>(2, pmeEnergyBuffer.getSize());
     }
     double computeForceAndEnergy(bool includeForces, bool includeEnergy, int groups) {
@@ -566,7 +566,7 @@ public:
 private:
     OpenCLContext& cl;
     cl::Event& event;
-    cl::Kernel addEnergyKernel;
+    OpenCLKernel addEnergyKernel;
     OpenCLArray& pmeEnergyBuffer;
     int forceGroup;
 };
@@ -713,9 +713,9 @@ void OpenCLCalcNonbondedForceKernel::initialize(const System& system, const Nonb
             replacements["EXP_COEFFICIENT"] = cl.doubleToString(-1.0/(4.0*alpha*alpha));
             replacements["ONE_4PI_EPS0"] = cl.doubleToString(ONE_4PI_EPS0);
             replacements["M_PI"] = cl.doubleToString(M_PI);
-            cl::Program program = cl.createProgram(CommonKernelSources::ewald, replacements);
-            ewaldSumsKernel = cl::Kernel(program, "calculateEwaldCosSinSums");
-            ewaldForcesKernel = cl::Kernel(program, "calculateEwaldForces");
+            auto program = NS::TransferPtr(cl.createProgram(CommonKernelSources::ewald, replacements));
+            ewaldSumsKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "calculateEwaldCosSinSums"));
+            ewaldForcesKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "calculateEwaldForces"));
             int elementSize = (cl.getUseDoublePrecision() ? sizeof(mm_double2) : sizeof(mm_float2));
             cosSinSums.initialize(cl, (2*kmaxx-1)*(2*kmaxy-1)*(2*kmaxz-1), elementSize, "cosSinSums");
         }
@@ -778,8 +778,8 @@ void OpenCLCalcNonbondedForceKernel::initialize(const System& system, const Nonb
                 try {
                     cpuPme = getPlatform().createKernel(CalcPmeReciprocalForceKernel::Name(), *cl.getPlatformData().context);
                     cpuPme.getAs<CalcPmeReciprocalForceKernel>().initialize(gridSizeX, gridSizeY, gridSizeZ, numParticles, alpha, false);
-                    cl::Program program = cl.createProgram(CommonKernelSources::pme, pmeDefines);
-                    cl::Kernel addForcesKernel = cl::Kernel(program, "addForces");
+                    auto program = NS::TransferPtr(cl.createProgram(CommonKernelSources::pme, pmeDefines));
+                    auto addForcesKernel = MTL::ComputePipelineState(program, "addForces");
                     pmeio = new PmeIO(cl, addForcesKernel);
                     cl.addPreComputation(new PmePreComputation(cl, cpuPme, *pmeio));
                     cl.addPostComputation(new PmePostComputation(cpuPme, *pmeio));
@@ -1077,9 +1077,9 @@ void OpenCLCalcNonbondedForceKernel::initialize(const System& system, const Nonb
     
     // Initialize the kernel for updating parameters.
     
-    cl::Program program = cl.createProgram(CommonKernelSources::nonbondedParameters, paramsDefines);
-    computeParamsKernel = cl::Kernel(program, "computeParameters");
-    computeExclusionParamsKernel = cl::Kernel(program, "computeExclusionParameters");
+    auto program = NS::TransferPtr(cl.createProgram(CommonKernelSources::nonbondedParameters, paramsDefines));
+    computeParamsKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "computeParameters"));
+    computeExclusionParamsKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "computeExclusionParameters"));
     info = new ForceInfo(0, force);
     cl.addForce(info);
 }
@@ -1089,76 +1089,76 @@ double OpenCLCalcNonbondedForceKernel::execute(ContextImpl& context, bool includ
     if (!hasInitializedKernel) {
         hasInitializedKernel = true;
         int index = 0;
-        computeParamsKernel.setArg<cl::Buffer>(index++, cl.getEnergyBuffer().getDeviceBuffer());
+        computeParamsKernel.setArg<MTL::Buffer>(index++, cl.getEnergyBuffer().getDeviceBuffer());
         index++;
-        computeParamsKernel.setArg<cl::Buffer>(index++, globalParams.getDeviceBuffer());
+        computeParamsKernel.setArg<MTL::Buffer>(index++, globalParams.getDeviceBuffer());
         computeParamsKernel.setArg<cl_int>(index++, cl.getPaddedNumAtoms());
-        computeParamsKernel.setArg<cl::Buffer>(index++, baseParticleParams.getDeviceBuffer());
-        computeParamsKernel.setArg<cl::Buffer>(index++, cl.getPosq().getDeviceBuffer());
-        computeParamsKernel.setArg<cl::Buffer>(index++, charges.getDeviceBuffer());
-        computeParamsKernel.setArg<cl::Buffer>(index++, sigmaEpsilon.getDeviceBuffer());
-        computeParamsKernel.setArg<cl::Buffer>(index++, particleParamOffsets.getDeviceBuffer());
-        computeParamsKernel.setArg<cl::Buffer>(index++, particleOffsetIndices.getDeviceBuffer());
+        computeParamsKernel.setArg<MTL::Buffer>(index++, baseParticleParams.getDeviceBuffer());
+        computeParamsKernel.setArg<MTL::Buffer>(index++, cl.getPosq().getDeviceBuffer());
+        computeParamsKernel.setArg<MTL::Buffer>(index++, charges.getDeviceBuffer());
+        computeParamsKernel.setArg<MTL::Buffer>(index++, sigmaEpsilon.getDeviceBuffer());
+        computeParamsKernel.setArg<MTL::Buffer>(index++, particleParamOffsets.getDeviceBuffer());
+        computeParamsKernel.setArg<MTL::Buffer>(index++, particleOffsetIndices.getDeviceBuffer());
         if (exceptionParams.isInitialized()) {
             computeParamsKernel.setArg<cl_int>(index++, exceptionParams.getSize());
-            computeParamsKernel.setArg<cl::Buffer>(index++, baseExceptionParams.getDeviceBuffer());
-            computeParamsKernel.setArg<cl::Buffer>(index++, exceptionParams.getDeviceBuffer());
-            computeParamsKernel.setArg<cl::Buffer>(index++, exceptionParamOffsets.getDeviceBuffer());
-            computeParamsKernel.setArg<cl::Buffer>(index++, exceptionOffsetIndices.getDeviceBuffer());
+            computeParamsKernel.setArg<MTL::Buffer>(index++, baseExceptionParams.getDeviceBuffer());
+            computeParamsKernel.setArg<MTL::Buffer>(index++, exceptionParams.getDeviceBuffer());
+            computeParamsKernel.setArg<MTL::Buffer>(index++, exceptionParamOffsets.getDeviceBuffer());
+            computeParamsKernel.setArg<MTL::Buffer>(index++, exceptionOffsetIndices.getDeviceBuffer());
         }
         if (exclusionParams.isInitialized()) {
-            computeExclusionParamsKernel.setArg<cl::Buffer>(0, cl.getPosq().getDeviceBuffer());
-            computeExclusionParamsKernel.setArg<cl::Buffer>(1, charges.getDeviceBuffer());
-            computeExclusionParamsKernel.setArg<cl::Buffer>(2, sigmaEpsilon.getDeviceBuffer());
+            computeExclusionParamsKernel.setArg<MTL::Buffer>(0, cl.getPosq().getDeviceBuffer());
+            computeExclusionParamsKernel.setArg<MTL::Buffer>(1, charges.getDeviceBuffer());
+            computeExclusionParamsKernel.setArg<MTL::Buffer>(2, sigmaEpsilon.getDeviceBuffer());
             computeExclusionParamsKernel.setArg<cl_int>(3, exclusionParams.getSize());
-            computeExclusionParamsKernel.setArg<cl::Buffer>(4, exclusionAtoms.getDeviceBuffer());
-            computeExclusionParamsKernel.setArg<cl::Buffer>(5, exclusionParams.getDeviceBuffer());
+            computeExclusionParamsKernel.setArg<MTL::Buffer>(4, exclusionAtoms.getDeviceBuffer());
+            computeExclusionParamsKernel.setArg<MTL::Buffer>(5, exclusionParams.getDeviceBuffer());
         }
         if (cosSinSums.isInitialized()) {
-            ewaldSumsKernel.setArg<cl::Buffer>(0, cl.getEnergyBuffer().getDeviceBuffer());
-            ewaldSumsKernel.setArg<cl::Buffer>(1, cl.getPosq().getDeviceBuffer());
-            ewaldSumsKernel.setArg<cl::Buffer>(2, cosSinSums.getDeviceBuffer());
-            ewaldForcesKernel.setArg<cl::Buffer>(0, cl.getLongForceBuffer().getDeviceBuffer());
-            ewaldForcesKernel.setArg<cl::Buffer>(1, cl.getPosq().getDeviceBuffer());
-            ewaldForcesKernel.setArg<cl::Buffer>(2, cosSinSums.getDeviceBuffer());
+            ewaldSumsKernel.setArg<MTL::Buffer>(0, cl.getEnergyBuffer().getDeviceBuffer());
+            ewaldSumsKernel.setArg<MTL::Buffer>(1, cl.getPosq().getDeviceBuffer());
+            ewaldSumsKernel.setArg<MTL::Buffer>(2, cosSinSums.getDeviceBuffer());
+            ewaldForcesKernel.setArg<MTL::Buffer>(0, cl.getLongForceBuffer().getDeviceBuffer());
+            ewaldForcesKernel.setArg<MTL::Buffer>(1, cl.getPosq().getDeviceBuffer());
+            ewaldForcesKernel.setArg<MTL::Buffer>(2, cosSinSums.getDeviceBuffer());
         }
         if (pmeGrid1.isInitialized()) {
             // Create kernels for Coulomb PME.
             
             map<string, string> replacements;
             replacements["CHARGE"] = (usePosqCharges ? "pos.w" : "charges[atom]");
-            cl::Program program = cl.createProgram(cl.replaceStrings(CommonKernelSources::pme, replacements), pmeDefines);
-            pmeGridIndexKernel = cl::Kernel(program, "findAtomGridIndex");
-            pmeSpreadChargeKernel = cl::Kernel(program, "gridSpreadCharge");
-            pmeConvolutionKernel = cl::Kernel(program, "reciprocalConvolution");
-            pmeEvalEnergyKernel = cl::Kernel(program, "gridEvaluateEnergy");
-            pmeInterpolateForceKernel = cl::Kernel(program, "gridInterpolateForce");
+            auto program = NS::TransferPtr(cl.createProgram(cl.replaceStrings(CommonKernelSources::pme, replacements), pmeDefines));
+            pmeGridIndexKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "findAtomGridIndex"));
+            pmeSpreadChargeKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "gridSpreadCharge"));
+            pmeConvolutionKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "reciprocalConvolution"));
+            pmeEvalEnergyKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "gridEvaluateEnergy"));
+            pmeInterpolateForceKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "gridInterpolateForce"));
             int elementSize = (cl.getUseDoublePrecision() ? sizeof(mm_double4) : sizeof(mm_float4));
-            pmeGridIndexKernel.setArg<cl::Buffer>(0, cl.getPosq().getDeviceBuffer());
-            pmeGridIndexKernel.setArg<cl::Buffer>(1, pmeAtomGridIndex.getDeviceBuffer());
-            pmeSpreadChargeKernel.setArg<cl::Buffer>(0, cl.getPosq().getDeviceBuffer());
-            pmeSpreadChargeKernel.setArg<cl::Buffer>(1, pmeGrid2.getDeviceBuffer());
-            pmeSpreadChargeKernel.setArg<cl::Buffer>(10, pmeAtomGridIndex.getDeviceBuffer());
-            pmeSpreadChargeKernel.setArg<cl::Buffer>(11, charges.getDeviceBuffer());
-            pmeConvolutionKernel.setArg<cl::Buffer>(0, pmeGrid2.getDeviceBuffer());
-            pmeConvolutionKernel.setArg<cl::Buffer>(1, pmeBsplineModuliX.getDeviceBuffer());
-            pmeConvolutionKernel.setArg<cl::Buffer>(2, pmeBsplineModuliY.getDeviceBuffer());
-            pmeConvolutionKernel.setArg<cl::Buffer>(3, pmeBsplineModuliZ.getDeviceBuffer());
-            pmeEvalEnergyKernel.setArg<cl::Buffer>(0, pmeGrid2.getDeviceBuffer());
-            pmeEvalEnergyKernel.setArg<cl::Buffer>(1, usePmeQueue ? pmeEnergyBuffer.getDeviceBuffer() : cl.getEnergyBuffer().getDeviceBuffer());
-            pmeEvalEnergyKernel.setArg<cl::Buffer>(2, pmeBsplineModuliX.getDeviceBuffer());
-            pmeEvalEnergyKernel.setArg<cl::Buffer>(3, pmeBsplineModuliY.getDeviceBuffer());
-            pmeEvalEnergyKernel.setArg<cl::Buffer>(4, pmeBsplineModuliZ.getDeviceBuffer());
-            pmeInterpolateForceKernel.setArg<cl::Buffer>(0, cl.getPosq().getDeviceBuffer());
-            pmeInterpolateForceKernel.setArg<cl::Buffer>(1, cl.getLongForceBuffer().getDeviceBuffer());
-            pmeInterpolateForceKernel.setArg<cl::Buffer>(2, pmeGrid1.getDeviceBuffer());
-            pmeInterpolateForceKernel.setArg<cl::Buffer>(11, pmeAtomGridIndex.getDeviceBuffer());
-            pmeInterpolateForceKernel.setArg<cl::Buffer>(12, charges.getDeviceBuffer());
-            pmeFinishSpreadChargeKernel = cl::Kernel(program, "finishSpreadCharge");
-            pmeFinishSpreadChargeKernel.setArg<cl::Buffer>(0, pmeGrid2.getDeviceBuffer());
-            pmeFinishSpreadChargeKernel.setArg<cl::Buffer>(1, pmeGrid1.getDeviceBuffer());
+            pmeGridIndexKernel.setArg<MTL::Buffer>(0, cl.getPosq().getDeviceBuffer());
+            pmeGridIndexKernel.setArg<MTL::Buffer>(1, pmeAtomGridIndex.getDeviceBuffer());
+            pmeSpreadChargeKernel.setArg<MTL::Buffer>(0, cl.getPosq().getDeviceBuffer());
+            pmeSpreadChargeKernel.setArg<MTL::Buffer>(1, pmeGrid2.getDeviceBuffer());
+            pmeSpreadChargeKernel.setArg<MTL::Buffer>(10, pmeAtomGridIndex.getDeviceBuffer());
+            pmeSpreadChargeKernel.setArg<MTL::Buffer>(11, charges.getDeviceBuffer());
+            pmeConvolutionKernel.setArg<MTL::Buffer>(0, pmeGrid2.getDeviceBuffer());
+            pmeConvolutionKernel.setArg<MTL::Buffer>(1, pmeBsplineModuliX.getDeviceBuffer());
+            pmeConvolutionKernel.setArg<MTL::Buffer>(2, pmeBsplineModuliY.getDeviceBuffer());
+            pmeConvolutionKernel.setArg<MTL::Buffer>(3, pmeBsplineModuliZ.getDeviceBuffer());
+            pmeEvalEnergyKernel.setArg<MTL::Buffer>(0, pmeGrid2.getDeviceBuffer());
+            pmeEvalEnergyKernel.setArg<MTL::Buffer>(1, usePmeQueue ? pmeEnergyBuffer.getDeviceBuffer() : cl.getEnergyBuffer().getDeviceBuffer());
+            pmeEvalEnergyKernel.setArg<MTL::Buffer>(2, pmeBsplineModuliX.getDeviceBuffer());
+            pmeEvalEnergyKernel.setArg<MTL::Buffer>(3, pmeBsplineModuliY.getDeviceBuffer());
+            pmeEvalEnergyKernel.setArg<MTL::Buffer>(4, pmeBsplineModuliZ.getDeviceBuffer());
+            pmeInterpolateForceKernel.setArg<MTL::Buffer>(0, cl.getPosq().getDeviceBuffer());
+            pmeInterpolateForceKernel.setArg<MTL::Buffer>(1, cl.getLongForceBuffer().getDeviceBuffer());
+            pmeInterpolateForceKernel.setArg<MTL::Buffer>(2, pmeGrid1.getDeviceBuffer());
+            pmeInterpolateForceKernel.setArg<MTL::Buffer>(11, pmeAtomGridIndex.getDeviceBuffer());
+            pmeInterpolateForceKernel.setArg<MTL::Buffer>(12, charges.getDeviceBuffer());
+            pmeFinishSpreadChargeKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "finishSpreadCharge"));
+            pmeFinishSpreadChargeKernel.setArg<MTL::Buffer>(0, pmeGrid2.getDeviceBuffer());
+            pmeFinishSpreadChargeKernel.setArg<MTL::Buffer>(1, pmeGrid1.getDeviceBuffer());
             if (usePmeQueue)
-                syncQueue->setKernel(cl::Kernel(program, "addEnergy"));
+                syncQueue->setKernel(NS::TransferPtr(MTL::ComputePipelineState(program, "addEnergy")));
 
             if (doLJPME) {
                 // Create kernels for LJ PME.
@@ -1172,34 +1172,34 @@ double OpenCLCalcNonbondedForceKernel::execute(ContextImpl& context, bool includ
                 pmeDefines["USE_LJPME"] = "1";
                 pmeDefines["CHARGE_FROM_SIGEPS"] = "1";
                 program = cl.createProgram(CommonKernelSources::pme, pmeDefines);
-                pmeDispersionGridIndexKernel = cl::Kernel(program, "findAtomGridIndex");
-                pmeDispersionSpreadChargeKernel = cl::Kernel(program, "gridSpreadCharge");
-                pmeDispersionConvolutionKernel = cl::Kernel(program, "reciprocalConvolution");
-                pmeDispersionEvalEnergyKernel = cl::Kernel(program, "gridEvaluateEnergy");
-                pmeDispersionInterpolateForceKernel = cl::Kernel(program, "gridInterpolateForce");
-                pmeDispersionGridIndexKernel.setArg<cl::Buffer>(0, cl.getPosq().getDeviceBuffer());
-                pmeDispersionGridIndexKernel.setArg<cl::Buffer>(1, pmeAtomGridIndex.getDeviceBuffer());
-                pmeDispersionSpreadChargeKernel.setArg<cl::Buffer>(0, cl.getPosq().getDeviceBuffer());
-                pmeDispersionSpreadChargeKernel.setArg<cl::Buffer>(1, pmeGrid2.getDeviceBuffer());
-                pmeDispersionSpreadChargeKernel.setArg<cl::Buffer>(10, pmeAtomGridIndex.getDeviceBuffer());
-                pmeDispersionSpreadChargeKernel.setArg<cl::Buffer>(11, sigmaEpsilon.getDeviceBuffer());
-                pmeDispersionConvolutionKernel.setArg<cl::Buffer>(0, pmeGrid2.getDeviceBuffer());
-                pmeDispersionConvolutionKernel.setArg<cl::Buffer>(1, pmeDispersionBsplineModuliX.getDeviceBuffer());
-                pmeDispersionConvolutionKernel.setArg<cl::Buffer>(2, pmeDispersionBsplineModuliY.getDeviceBuffer());
-                pmeDispersionConvolutionKernel.setArg<cl::Buffer>(3, pmeDispersionBsplineModuliZ.getDeviceBuffer());
-                pmeDispersionEvalEnergyKernel.setArg<cl::Buffer>(0, pmeGrid2.getDeviceBuffer());
-                pmeDispersionEvalEnergyKernel.setArg<cl::Buffer>(1, usePmeQueue ? pmeEnergyBuffer.getDeviceBuffer() : cl.getEnergyBuffer().getDeviceBuffer());
-                pmeDispersionEvalEnergyKernel.setArg<cl::Buffer>(2, pmeDispersionBsplineModuliX.getDeviceBuffer());
-                pmeDispersionEvalEnergyKernel.setArg<cl::Buffer>(3, pmeDispersionBsplineModuliY.getDeviceBuffer());
-                pmeDispersionEvalEnergyKernel.setArg<cl::Buffer>(4, pmeDispersionBsplineModuliZ.getDeviceBuffer());
-                pmeDispersionInterpolateForceKernel.setArg<cl::Buffer>(0, cl.getPosq().getDeviceBuffer());
-                pmeDispersionInterpolateForceKernel.setArg<cl::Buffer>(1, cl.getLongForceBuffer().getDeviceBuffer());
-                pmeDispersionInterpolateForceKernel.setArg<cl::Buffer>(2, pmeGrid1.getDeviceBuffer());
-                pmeDispersionInterpolateForceKernel.setArg<cl::Buffer>(11, pmeAtomGridIndex.getDeviceBuffer());
-                pmeDispersionInterpolateForceKernel.setArg<cl::Buffer>(12, sigmaEpsilon.getDeviceBuffer());
-                pmeDispersionFinishSpreadChargeKernel = cl::Kernel(program, "finishSpreadCharge");
-                pmeDispersionFinishSpreadChargeKernel.setArg<cl::Buffer>(0, pmeGrid2.getDeviceBuffer());
-                pmeDispersionFinishSpreadChargeKernel.setArg<cl::Buffer>(1, pmeGrid1.getDeviceBuffer());
+                pmeDispersionGridIndexKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "findAtomGridIndex"));
+                pmeDispersionSpreadChargeKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "gridSpreadCharge"));
+                pmeDispersionConvolutionKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "reciprocalConvolution"));
+                pmeDispersionEvalEnergyKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "gridEvaluateEnergy"));
+                pmeDispersionInterpolateForceKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "gridInterpolateForce"));
+                pmeDispersionGridIndexKernel.setArg<MTL::Buffer>(0, cl.getPosq().getDeviceBuffer());
+                pmeDispersionGridIndexKernel.setArg<MTL::Buffer>(1, pmeAtomGridIndex.getDeviceBuffer());
+                pmeDispersionSpreadChargeKernel.setArg<MTL::Buffer>(0, cl.getPosq().getDeviceBuffer());
+                pmeDispersionSpreadChargeKernel.setArg<MTL::Buffer>(1, pmeGrid2.getDeviceBuffer());
+                pmeDispersionSpreadChargeKernel.setArg<MTL::Buffer>(10, pmeAtomGridIndex.getDeviceBuffer());
+                pmeDispersionSpreadChargeKernel.setArg<MTL::Buffer>(11, sigmaEpsilon.getDeviceBuffer());
+                pmeDispersionConvolutionKernel.setArg<MTL::Buffer>(0, pmeGrid2.getDeviceBuffer());
+                pmeDispersionConvolutionKernel.setArg<MTL::Buffer>(1, pmeDispersionBsplineModuliX.getDeviceBuffer());
+                pmeDispersionConvolutionKernel.setArg<MTL::Buffer>(2, pmeDispersionBsplineModuliY.getDeviceBuffer());
+                pmeDispersionConvolutionKernel.setArg<MTL::Buffer>(3, pmeDispersionBsplineModuliZ.getDeviceBuffer());
+                pmeDispersionEvalEnergyKernel.setArg<MTL::Buffer>(0, pmeGrid2.getDeviceBuffer());
+                pmeDispersionEvalEnergyKernel.setArg<MTL::Buffer>(1, usePmeQueue ? pmeEnergyBuffer.getDeviceBuffer() : cl.getEnergyBuffer().getDeviceBuffer());
+                pmeDispersionEvalEnergyKernel.setArg<MTL::Buffer>(2, pmeDispersionBsplineModuliX.getDeviceBuffer());
+                pmeDispersionEvalEnergyKernel.setArg<MTL::Buffer>(3, pmeDispersionBsplineModuliY.getDeviceBuffer());
+                pmeDispersionEvalEnergyKernel.setArg<MTL::Buffer>(4, pmeDispersionBsplineModuliZ.getDeviceBuffer());
+                pmeDispersionInterpolateForceKernel.setArg<MTL::Buffer>(0, cl.getPosq().getDeviceBuffer());
+                pmeDispersionInterpolateForceKernel.setArg<MTL::Buffer>(1, cl.getLongForceBuffer().getDeviceBuffer());
+                pmeDispersionInterpolateForceKernel.setArg<MTL::Buffer>(2, pmeGrid1.getDeviceBuffer());
+                pmeDispersionInterpolateForceKernel.setArg<MTL::Buffer>(11, pmeAtomGridIndex.getDeviceBuffer());
+                pmeDispersionInterpolateForceKernel.setArg<MTL::Buffer>(12, sigmaEpsilon.getDeviceBuffer());
+                pmeDispersionFinishSpreadChargeKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "finishSpreadCharge"));
+                pmeDispersionFinishSpreadChargeKernel.setArg<MTL::Buffer>(0, pmeGrid2.getDeviceBuffer());
+                pmeDispersionFinishSpreadChargeKernel.setArg<MTL::Buffer>(1, pmeGrid1.getDeviceBuffer());
             }
        }
     }

@@ -42,6 +42,8 @@ public:
     /**
      * Place the event into the device's execution queue.
      */
+    // NOTE: If the event was already enqueued, this blocks until the previous
+    // event instance completed.
     void enqueue();
     /**
      * Block until all operations started before the call to enqueue() have completed.
@@ -49,7 +51,8 @@ public:
     void wait();
 private:
     OpenCLContext& context;
-    cl::Event event;
+    bool semaphoreExists = false;
+    dispatch_semaphore_t semaphore;
 };
 
 } // namespace OpenMM

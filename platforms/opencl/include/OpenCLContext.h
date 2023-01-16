@@ -50,6 +50,7 @@
 #endif
 #include <pthread.h>
 #include "opencl.hpp"
+#include "Metal/Metal.hpp"
 #include "openmm/common/windowsExportCommon.h"
 #include "OpenCLArray.h"
 #include "OpenCLBondedUtilities.h"
@@ -148,28 +149,35 @@ public:
      */
     void requestForceBuffers(int minBuffers);
     /**
-     * Get the cl::Context associated with this object.
-     */
-    cl::Context& getContext() {
-        return context;
-    }
     /**
      * Get the cl::Device associated with this object.
      */
-    cl::Device& getDevice() {
+    MTL::Device* getDevice() {
         return device;
     }
+    
+    // We need this to retrieve system information on AMD devices. On M1, it's
+    // technically possible to remove the OpenCL dependency entirely. But it
+    // would be harder to maintain two separate code paths for M1 and AMD.
+    cl::Device getInfoDevice() {
+        return infoDevice;
+    }
+    
+    // You must call `newCompute/BlitCommand` before starting each command.
+    // Otherwise, you will mess with the automatic tracking of command buffer
+    // size.
+    void maybeFlushCommands(bool forceFlush = false, bool waitOnFlush = false);
+    MTL::ComputeCommandEncoder* nextComputeCommand();
+    MTL::BlitCommandEncoder* nextBlitCommand();
+    
+    // An OpenCLEvent must wait+release any un-waited semaphore on deallocation.
+    dispatch_semaphore_t createSemaphoreAndFlush();
+    MTL::Buffer* newTemporaryBuffer(void *ptr, int64_t size, int64_t* offset);
     /**
      * Get the index of the cl::Device associated with this object.
      */
     int getDeviceIndex() {
         return deviceIndex;
-    }
-    /**
-     * Get the index of the cl::Platform associated with this object.
-     */
-    int getPlatformIndex() {
-        return platformIndex;
     }
     /**
      * Get the PlatformData object this context is part of.
@@ -191,18 +199,7 @@ public:
     int getContextIndex() const {
         return contextIndex;
     }
-    /**
-     * Get the cl::CommandQueue currently being used for execution.
-     */
-    cl::CommandQueue& getQueue();
-    /**
-     * Set the cl::ComandQueue to use for execution.
-     */
-    void setQueue(cl::CommandQueue& queue);
-    /**
-     * Reset the context to using the default queue for execution.
-     */
-    void restoreDefaultQueue();
+    
     /**
      * Construct an uninitialized array of the appropriate class for this platform.  The returned
      * value should be created on the heap with the "new" operator.
@@ -310,7 +307,7 @@ public:
      * @param optimizationFlags  the optimization flags to pass to the OpenCL compiler.  If this is
      *                           omitted, a default set of options will be used
      */
-    cl::Program createProgram(const std::string source, const char* optimizationFlags = NULL);
+    MTL::Library* createProgram(const std::string source, MTL::CompileOptions* optimizationFlags = NULL);
     /**
      * Create an OpenCL Program from source code.
      *
@@ -319,7 +316,7 @@ public:
      * @param optimizationFlags  the optimization flags to pass to the OpenCL compiler.  If this is
      *                           omitted, a default set of options will be used
      */
-    cl::Program createProgram(const std::string source, const std::map<std::string, std::string>& defines, const char* optimizationFlags = NULL);
+    MTL::Library* createProgram(const std::string source, const std::map<std::string, std::string>& defines, MTL::CompileOptions* optimizationFlags = NULL);
     /**
      * Execute a kernel.
      *
@@ -327,7 +324,12 @@ public:
      * @param workUnits    the maximum number of work units that should be used
      * @param blockSize    the size of each thread block to use
      */
-    void executeKernel(cl::Kernel& kernel, int workUnits, int blockSize = -1);
+    void executeKernel(OpenCLKernel kernel, int workUnits, int blockSize = -1);
+    
+    void executeMemcpy(OpenCLArray dst, OpenCLArray src, int len);
+    
+    void executeMemset(OpenCLArray dst, int pattern, int len);
+    
     /**
      * Compute the largest thread block size that can be used for a kernel that requires a particular amount of
      * shared memory per thread.
@@ -345,7 +347,7 @@ public:
      * @param memory     the Memory to clear
      * @param size       the size of the buffer in bytes
      */
-    void clearBuffer(cl::Memory& memory, int size);
+    void clearBuffer(OpenCLArray& array, int size);
     /**
      * Register a buffer that should be automatically cleared (all elements set to 0) at the start of each force or energy computation.
      */
@@ -356,7 +358,7 @@ public:
      * @param memory     the Memory to clear
      * @param size       the size of the buffer in bytes
      */
-    void addAutoclearBuffer(cl::Memory& memory, int size);
+    void addAutoclearBuffer(OpenCLArray& array, int size);
     /**
      * Clear all buffers that have been registered with addAutoclearBuffer().
      */
@@ -448,6 +450,9 @@ public:
     /**
      * Get the standard number of thread blocks to use when executing kernels.
      */
+    // TODO: Revisit every line that touches this, because it could be making
+    // incorrect assumptions about performance on M1. Also consider changing the
+    // work group size.
     int getNumThreadBlocks() const {
         return numThreadBlocks;
     }
@@ -455,7 +460,7 @@ public:
      * Get the maximum number of threads in a thread block supported by this device.
      */
     int getMaxThreadBlockSize() const {
-        return device.getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
+        return device->maxThreadsPerThreadgroup();
     }
     /**
      * Get the number of force buffers.
@@ -468,7 +473,7 @@ public:
      * may be more efficient on CPUs and GPUs.
      */
     bool getIsCPU() const {
-        return (device.getInfo<CL_DEVICE_TYPE>() == CL_DEVICE_TYPE_CPU);
+        return false;
     }
     /**
      * Get the SIMD width of the device being used.
@@ -480,25 +485,25 @@ public:
      * Get whether the device being used supports 64 bit atomic operations on global memory.
      */
     bool getSupports64BitGlobalAtomics() const {
-        return supports64BitGlobalAtomics;
+        return false;
     }
     /**
      * Get whether the device being used supports double precision math.
      */
     bool getSupportsDoublePrecision() const {
-        return supportsDoublePrecision;
+        return false;
     }
     /**
      * Get whether double precision is being used.
      */
     bool getUseDoublePrecision() const {
-        return useDoublePrecision;
+        return false;
     }
     /**
      * Get whether mixed precision is being used.
      */
     bool getUseMixedPrecision() const {
-        return useMixedPrecision;
+        return false;
     }
     /**
      * Get whether the periodic box is triclinic.
@@ -667,31 +672,42 @@ public:
 private:
     OpenCLPlatform::PlatformData& platformData;
     int deviceIndex;
-    int platformIndex;
-    int contextIndex;
     int numAtomBlocks;
     int numThreadBlocks;
     int numForceBuffers;
     int simdWidth;
-    bool supports64BitGlobalAtomics, supportsDoublePrecision, useDoublePrecision, useMixedPrecision, boxIsTriclinic, hasAssignedPosqCharges;
+    bool boxIsTriclinic, hasAssignedPosqCharges;
     mm_float4 periodicBoxSize, invPeriodicBoxSize, periodicBoxVecX, periodicBoxVecY, periodicBoxVecZ;
     mm_double4 periodicBoxSizeDouble, invPeriodicBoxSizeDouble, periodicBoxVecXDouble, periodicBoxVecYDouble, periodicBoxVecZDouble;
-    std::string defaultOptimizationOptions;
+    NS::SharedPtr<MTL::CompileOptions> defaultOptimizationOptions;
+    NS::SharedPtr<MTLDynamicLibrary> dynamicFunctions;
     std::map<std::string, std::string> compilationDefines;
-    cl::Context context;
-    cl::Device device;
-    cl::CommandQueue defaultQueue, currentQueue;
-    cl::Kernel clearBufferKernel;
-    cl::Kernel clearTwoBuffersKernel;
-    cl::Kernel clearThreeBuffersKernel;
-    cl::Kernel clearFourBuffersKernel;
-    cl::Kernel clearFiveBuffersKernel;
-    cl::Kernel clearSixBuffersKernel;
-    cl::Kernel reduceReal4Kernel;
-    cl::Kernel reduceForcesKernel;
-    cl::Kernel reduceEnergyKernel;
-    cl::Kernel setChargesKernel;
-    cl::Buffer* pinnedBuffer;
+    NS::SharedPtr<MTL::Device> device;
+    cl::Device infoDevice;
+    NS::SharedPtr<MTL::CommandQueue> queue;
+    NS::SharedPtr<MTL::SharedEvent> syncEvent;
+    NS::AutoreleasePool* commandPool;
+    // TODO: Initialize the first commandPool/commandBuffer when creating the
+    // OpenCLContext. A different pool (not `commndPool`) should handle
+    // temporary objects when creating kernels.
+    MTL::CommandBuffer* commandBuffer;
+    MTL::ComputeCommandEncoder* computeEncoder;
+    // TODO: Maybe implement a compute version of the blit encoder on M1, if
+    // encoding overhead is problematic.
+    MTL::BlitCommandEncoder* blitEncoder;
+    int numBufferedCommands = 0;
+    int maxBufferedCommands = 10;
+    OpenCLKernel clearBufferKernel;
+    OpenCLKernel clearTwoBuffersKernel;
+    OpenCLKernel clearThreeBuffersKernel;
+    OpenCLKernel clearFourBuffersKernel;
+    OpenCLKernel clearFiveBuffersKernel;
+    OpenCLKernel clearSixBuffersKernel;
+    OpenCLKernel reduceReal4Kernel;
+    OpenCLKernel reduceForcesKernel;
+    OpenCLKernel reduceEnergyKernel;
+    OpenCLKernel setChargesKernel;
+    OpenCLArray pinnedBuffer;
     void* pinnedMemory;
     OpenCLArray posq;
     OpenCLArray posqCorrection;
@@ -706,7 +722,7 @@ private:
     OpenCLArray chargeBuffer;
     std::vector<std::string> energyParamDerivNames;
     std::map<std::string, double> energyParamDerivWorkspace;
-    std::vector<cl::Memory*> autoclearBuffers;
+    std::vector<OpenCLArray> autoclearBuffers;
     std::vector<int> autoclearBufferSizes;
     OpenCLIntegrationUtilities* integration;
     OpenCLExpressionUtilities* expression;

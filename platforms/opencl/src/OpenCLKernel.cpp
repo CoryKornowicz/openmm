@@ -31,15 +31,19 @@
 using namespace OpenMM;
 using namespace std;
 
-OpenCLKernel::OpenCLKernel(OpenCLContext& context, cl::Kernel kernel) : context(context), kernel(kernel) {
+OpenCLKernel::OpenCLKernel(OpenCLContext& context, MTL::ComputePipelineState* pipeline) : context(context) {
+    this->pipeline = NS::TransferPtr(pipeline);
 }
 
 string OpenCLKernel::getName() const {
-    return kernel.getInfo<CL_KERNEL_FUNCTION_NAME>();
+    // Function name was stored here during pipeline creation.
+    NS::String* functionName = pipeline->label();
+    const char* c_str = functionName->cString(NS::UTF8StringEncoding);
+    return std::string(c_str);
 }
 
 int OpenCLKernel::getMaxBlockSize() const {
-    return kernel.getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(context.getDevice());
+    return pipeline->maxTotalThreadsPerThreadgroup();
 }
 
 void OpenCLKernel::execute(int threads, int blockSize) {
@@ -47,10 +51,22 @@ void OpenCLKernel::execute(int threads, int blockSize) {
     // possible resize() will get called on an array, causing its internal storage to be
     // recreated.
     
-    for (int i = 0; i < arrayArgs.size(); i++)
-        if (arrayArgs[i] != NULL)
-            kernel.setArg<cl::Buffer>(i, arrayArgs[i]->getDeviceBuffer());
-    context.executeKernel(kernel, threads, blockSize);
+    if (blockSize % context.getSIMDWidth() != 0)
+        throw OpenMMException("Threadgroup size not multiple of execution width.")
+    
+    MTL::ComputeCommandEncoder* encoder = context.nextComputeCommand();
+    encoder->setComputePipelineState(pipeline.get());
+    for (int i = 0; i < arrayArgs.size(); i++) {
+        auto argument = arrayArgs[i];
+        if (argument.maybeArray) {
+            encoder->setBuffer(argument.maybeArray->getDeviceBuffer(), 0, i);
+        } else if (argument.maybePrimitive.size() > 0) {
+            auto primitive = argument.maybePrimitive;
+            auto size = argument.maybePrimitiveSize;
+            encoder->setBytes(primitive.data(), primitive.size(), i);
+        }
+    }
+    encoder->dispatchThreads({threads, 1, 1}, {blockSize, 1, 1});
 }
 
 void OpenCLKernel::addArrayArg(ArrayInterface& value) {
@@ -66,17 +82,20 @@ void OpenCLKernel::addPrimitiveArg(const void* value, int size) {
 }
 
 void OpenCLKernel::addEmptyArg() {
-    arrayArgs.push_back(NULL);
+    Argument emptyArgument{ NULL, std::vector<uint8_t>() };
+    arrayArgs.push_back(emptyArgument);
 }
 
 void OpenCLKernel::setArrayArg(int index, ArrayInterface& value) {
     ASSERT_VALID_INDEX(index, arrayArgs);
-    arrayArgs[index] = &context.unwrap(value);
+    Argument argument{ &context.unwrap(value), std::vector<uint8_t>() };
+    arrayArgs[index] = argument;
 }
 
 void OpenCLKernel::setPrimitiveArg(int index, const void* value, int size) {
     ASSERT_VALID_INDEX(index, arrayArgs);
-    // The const_cast is needed because of a bug in the OpenCL C++ wrappers.  clSetKernelArg()
-    // declares the value to be const, but the C++ wrapper doesn't.
-    kernel.setArg(index, size, const_cast<void*>(value));
+    std::vector<uint8_t> primitive;
+    primitive.assign((const uint8_t*)value, (const uint8_t*)value + size);
+    Argument argument{ NULL, primitive };
+    arrayArgs[index] = argument;
 }

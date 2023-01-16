@@ -37,8 +37,8 @@ public:
 private:
     OpenCLContext& context;
     OpenCLArray dgBlockCounts;
-    cl::Kernel countKernel;
-    cl::Kernel moveValidKernel;
+    OpenCLKernel countKernel;
+    OpenCLKernel moveValidKernel;
 };
 
 } // namespace OpenMM

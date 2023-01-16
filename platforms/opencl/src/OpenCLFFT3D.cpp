@@ -78,13 +78,13 @@ OpenCLFFT3D::OpenCLFFT3D(OpenCLContext& context, int xsize, int ysize, int zsize
             defines["PACKED_YSIZE"] = context.intToString(packedYSize);
             defines["PACKED_ZSIZE"] = context.intToString(packedZSize);
             defines["M_PI"] = context.doubleToString(M_PI);
-            cl::Program program = context.createProgram(OpenCLKernelSources::fftR2C, defines);
-            packForwardKernel = cl::Kernel(program, "packForwardData");
-            unpackForwardKernel = cl::Kernel(program, "unpackForwardData");
+            auto program = NS::TransferPtr(context.createProgram(OpenCLKernelSources::fftR2C, defines));
+            packForwardKernel = NS::TransferPtr(MTL::ComputePipelineState((program, "packForwardData"));
+            unpackForwardKernel = NS::TransferPtr(MTL::ComputePipelineState((program, "unpackForwardData"));
             unpackForwardKernel.setArg(2, bufferSize*(context.getUseDoublePrecision() ? sizeof(mm_double2) : sizeof(mm_float2)), NULL);
-            packBackwardKernel = cl::Kernel(program, "packBackwardData");
+            packBackwardKernel = NS::TransferPtr(MTL::ComputePipelineState((program, "packBackwardData"));
             packBackwardKernel.setArg(2, bufferSize*(context.getUseDoublePrecision() ? sizeof(mm_double2) : sizeof(mm_float2)), NULL);
-            unpackBackwardKernel = cl::Kernel(program, "unpackBackwardData");
+            unpackBackwardKernel = NS::TransferPtr(MTL::ComputePipelineState((program, "unpackBackwardData"));
         }
     }
     bool inputIsReal = (realToComplex && !packRealAsComplex);
@@ -97,47 +97,47 @@ OpenCLFFT3D::OpenCLFFT3D(OpenCLContext& context, int xsize, int ysize, int zsize
 }
 
 void OpenCLFFT3D::execFFT(OpenCLArray& in, OpenCLArray& out, bool forward) {
-    cl::Kernel kernel1 = (forward ? zkernel : invzkernel);
-    cl::Kernel kernel2 = (forward ? xkernel : invxkernel);
-    cl::Kernel kernel3 = (forward ? ykernel : invykernel);
+    OpenCLKernel* kernel1 = (forward ? &zkernel : &invzkernel);
+    OpenCLKernel* kernel2 = (forward ? &xkernel : &invxkernel);
+    OpenCLKernel* kernel3 = (forward ? &ykernel : &invykernel);
     if (packRealAsComplex) {
-        cl::Kernel packKernel = (forward ? packForwardKernel : packBackwardKernel);
-        cl::Kernel unpackKernel = (forward ? unpackForwardKernel : unpackBackwardKernel);
+        OpenCLKernel* packKernel = (forward ? &packForwardKernel : &packBackwardKernel);
+        OpenCLKernel* unpackKernel = (forward ? &unpackForwardKernel : &unpackBackwardKernel);
         int gridSize = xsize*ysize*zsize/2;
 
         // Pack the data into a half sized grid.
         
-        packKernel.setArg<cl::Buffer>(0, in.getDeviceBuffer());
-        packKernel.setArg<cl::Buffer>(1, out.getDeviceBuffer());
+        packKernel.setArg<MTL::Buffer>(0, in.getDeviceBuffer());
+        packKernel.setArg<MTL::Buffer>(1, out.getDeviceBuffer());
         context.executeKernel(packKernel, gridSize);
         
         // Perform the FFT.
         
-        kernel1.setArg<cl::Buffer>(0, out.getDeviceBuffer());
-        kernel1.setArg<cl::Buffer>(1, in.getDeviceBuffer());
+        kernel1.setArg<MTL::Buffer>(0, out.getDeviceBuffer());
+        kernel1.setArg<MTL::Buffer>(1, in.getDeviceBuffer());
         context.executeKernel(kernel1, gridSize, zthreads);
-        kernel2.setArg<cl::Buffer>(0, in.getDeviceBuffer());
-        kernel2.setArg<cl::Buffer>(1, out.getDeviceBuffer());
+        kernel2.setArg<MTL::Buffer>(0, in.getDeviceBuffer());
+        kernel2.setArg<MTL::Buffer>(1, out.getDeviceBuffer());
         context.executeKernel(kernel2, gridSize, xthreads);
-        kernel3.setArg<cl::Buffer>(0, out.getDeviceBuffer());
-        kernel3.setArg<cl::Buffer>(1, in.getDeviceBuffer());
+        kernel3.setArg<MTL::Buffer>(0, out.getDeviceBuffer());
+        kernel3.setArg<MTL::Buffer>(1, in.getDeviceBuffer());
         context.executeKernel(kernel3, gridSize, ythreads);
         
         // Unpack the data.
         
-        unpackKernel.setArg<cl::Buffer>(0, in.getDeviceBuffer());
-        unpackKernel.setArg<cl::Buffer>(1, out.getDeviceBuffer());
+        unpackKernel.setArg<MTL::Buffer>(0, in.getDeviceBuffer());
+        unpackKernel.setArg<MTL::Buffer>(1, out.getDeviceBuffer());
         context.executeKernel(unpackKernel, gridSize);
     }
     else {
-        kernel1.setArg<cl::Buffer>(0, in.getDeviceBuffer());
-        kernel1.setArg<cl::Buffer>(1, out.getDeviceBuffer());
+        kernel1.setArg<MTL::Buffer>(0, in.getDeviceBuffer());
+        kernel1.setArg<MTL::Buffer>(1, out.getDeviceBuffer());
         context.executeKernel(kernel1, xsize*ysize*zsize, zthreads);
-        kernel2.setArg<cl::Buffer>(0, out.getDeviceBuffer());
-        kernel2.setArg<cl::Buffer>(1, in.getDeviceBuffer());
+        kernel2.setArg<MTL::Buffer>(0, out.getDeviceBuffer());
+        kernel2.setArg<MTL::Buffer>(1, in.getDeviceBuffer());
         context.executeKernel(kernel2, xsize*ysize*zsize, xthreads);
-        kernel3.setArg<cl::Buffer>(0, in.getDeviceBuffer());
-        kernel3.setArg<cl::Buffer>(1, out.getDeviceBuffer());
+        kernel3.setArg<MTL::Buffer>(0, in.getDeviceBuffer());
+        kernel3.setArg<MTL::Buffer>(1, out.getDeviceBuffer());
         context.executeKernel(kernel3, xsize*ysize*zsize, ythreads);
     }
 }
@@ -159,7 +159,7 @@ int OpenCLFFT3D::findLegalDimension(int minimum) {
     }
 }
 
-cl::Kernel OpenCLFFT3D::createKernel(int xsize, int ysize, int zsize, int& threads, int axis, bool forward, bool inputIsReal) {
+OpenCLKernel OpenCLFFT3D::createKernel(int xsize, int ysize, int zsize, int& threads, int axis, bool forward, bool inputIsReal) {
     int maxThreads = min(256, (int) context.getDevice().getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>());
     while (maxThreads > 128 && maxThreads-64 >= zsize)
         maxThreads -= 64;
@@ -350,8 +350,8 @@ cl::Kernel OpenCLFFT3D::createKernel(int xsize, int ysize, int zsize, int& threa
         replacements["INPUT_IS_REAL"] = (inputIsReal && axis == 0 && forward ? "1" : "0");
         replacements["INPUT_IS_PACKED"] = (inputIsReal && axis == 0 && !forward ? "1" : "0");
         replacements["OUTPUT_IS_PACKED"] = (outputIsPacked ? "1" : "0");
-        cl::Program program = context.createProgram(context.replaceStrings(OpenCLKernelSources::fft, replacements));
-        cl::Kernel kernel(program, "execFFT");
+        auto program = NS::TransferPtr(context.createProgram(context.replaceStrings(OpenCLKernelSources::fft, replacements)));
+        OpenCLKernel kernel(program, "execFFT");
         threads = (isCPU ? 1 : blocksPerGroup*zsize);
         int kernelMaxThreads = kernel.getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(context.getDevice());
         if (threads > kernelMaxThreads) {

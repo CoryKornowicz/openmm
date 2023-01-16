@@ -49,15 +49,15 @@ OpenCLSort::OpenCLSort(OpenCLContext& context, SortTrait* trait, unsigned int le
     replacements["MAX_KEY"] = trait->getMaxKey();
     replacements["MAX_VALUE"] = trait->getMaxValue();
     replacements["UNIFORM"] = (uniform ? "1" : "0");
-    cl::Program program = context.createProgram(context.replaceStrings(OpenCLKernelSources::sort, replacements));
-    shortListKernel = cl::Kernel(program, "sortShortList");
-    shortList2Kernel = cl::Kernel(program, "sortShortList2");
-    computeRangeKernel = cl::Kernel(program, "computeRange");
-    assignElementsKernel = cl::Kernel(program, "assignElementsToBuckets");
-    assignElementsKernel = cl::Kernel(program, uniform ? "assignElementsToBuckets" : "assignElementsToBuckets2");
-    computeBucketPositionsKernel = cl::Kernel(program, "computeBucketPositions");
-    copyToBucketsKernel = cl::Kernel(program, "copyDataToBuckets");
-    sortBucketsKernel = cl::Kernel(program, "sortBuckets");
+    auto program = NS::TransferPtr(context.createProgram(context.replaceStrings(OpenCLKernelSources::sort, replacements)));
+    shortListKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "sortShortList"));
+    shortList2Kernel = NS::TransferPtr(MTL::ComputePipelineState(program, "sortShortList2"));
+    computeRangeKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "computeRange"));
+    assignElementsKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "assignElementsToBuckets"));
+    assignElementsKernel = NS::TransferPtr(MTL::ComputePipelineState(program, uniform ? "assignElementsToBuckets" : "assignElementsToBuckets2"));
+    computeBucketPositionsKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "computeBucketPositions"));
+    copyToBucketsKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "copyDataToBuckets"));
+    sortBucketsKernel = NS::TransferPtr(MTL::ComputePipelineState(program, "sortBuckets"));
 
     // Work out the work group sizes for various kernels.
 
@@ -115,14 +115,14 @@ void OpenCLSort::sort(OpenCLArray& data) {
         
         try {
             if (useShortList2) {
-                shortList2Kernel.setArg<cl::Buffer>(0, data.getDeviceBuffer());
-                shortList2Kernel.setArg<cl::Buffer>(1, buckets.getDeviceBuffer());
+                shortList2Kernel.setArg<MTL::Buffer>(0, data.getDeviceBuffer());
+                shortList2Kernel.setArg<MTL::Buffer>(1, buckets.getDeviceBuffer());
                 shortList2Kernel.setArg<cl_int>(2, dataLength);
                 context.executeKernel(shortList2Kernel, dataLength);
                 buckets.copyTo(data);
             }
             else {
-                shortListKernel.setArg<cl::Buffer>(0, data.getDeviceBuffer());
+                shortListKernel.setArg<MTL::Buffer>(0, data.getDeviceBuffer());
                 shortListKernel.setArg<cl_uint>(1, dataLength);
                 shortListKernel.setArg(2, dataLength*trait->getDataSize(), NULL);
                 context.executeKernel(shortListKernel, sortKernelSize, sortKernelSize);
@@ -140,49 +140,49 @@ void OpenCLSort::sort(OpenCLArray& data) {
     // Compute the range of data values.
 
     unsigned int numBuckets = bucketOffset.getSize();
-    computeRangeKernel.setArg<cl::Buffer>(0, data.getDeviceBuffer());
+    computeRangeKernel.setArg<MTL::Buffer>(0, data.getDeviceBuffer());
     computeRangeKernel.setArg<cl_uint>(1, data.getSize());
-    computeRangeKernel.setArg<cl::Buffer>(2, dataRange.getDeviceBuffer());
+    computeRangeKernel.setArg<MTL::Buffer>(2, dataRange.getDeviceBuffer());
     computeRangeKernel.setArg(3, rangeKernelSize*trait->getKeySize(), NULL);
     computeRangeKernel.setArg(4, rangeKernelSize*trait->getKeySize(), NULL);
     computeRangeKernel.setArg<cl_int>(5, numBuckets);
-    computeRangeKernel.setArg<cl::Buffer>(6, bucketOffset.getDeviceBuffer());
+    computeRangeKernel.setArg<MTL::Buffer>(6, bucketOffset.getDeviceBuffer());
     context.executeKernel(computeRangeKernel, rangeKernelSize, rangeKernelSize);
 
     // Assign array elements to buckets.
 
-    assignElementsKernel.setArg<cl::Buffer>(0, data.getDeviceBuffer());
+    assignElementsKernel.setArg<MTL::Buffer>(0, data.getDeviceBuffer());
     assignElementsKernel.setArg<cl_int>(1, data.getSize());
     assignElementsKernel.setArg<cl_int>(2, numBuckets);
-    assignElementsKernel.setArg<cl::Buffer>(3, dataRange.getDeviceBuffer());
-    assignElementsKernel.setArg<cl::Buffer>(4, bucketOffset.getDeviceBuffer());
-    assignElementsKernel.setArg<cl::Buffer>(5, bucketOfElement.getDeviceBuffer());
-    assignElementsKernel.setArg<cl::Buffer>(6, offsetInBucket.getDeviceBuffer());
+    assignElementsKernel.setArg<MTL::Buffer>(3, dataRange.getDeviceBuffer());
+    assignElementsKernel.setArg<MTL::Buffer>(4, bucketOffset.getDeviceBuffer());
+    assignElementsKernel.setArg<MTL::Buffer>(5, bucketOfElement.getDeviceBuffer());
+    assignElementsKernel.setArg<MTL::Buffer>(6, offsetInBucket.getDeviceBuffer());
     context.executeKernel(assignElementsKernel, data.getSize());
 
     // Compute the position of each bucket.
 
     computeBucketPositionsKernel.setArg<cl_int>(0, numBuckets);
-    computeBucketPositionsKernel.setArg<cl::Buffer>(1, bucketOffset.getDeviceBuffer());
+    computeBucketPositionsKernel.setArg<MTL::Buffer>(1, bucketOffset.getDeviceBuffer());
     computeBucketPositionsKernel.setArg(2, positionsKernelSize*sizeof(cl_int), NULL);
     context.executeKernel(computeBucketPositionsKernel, positionsKernelSize, positionsKernelSize);
 
     // Copy the data into the buckets.
 
-    copyToBucketsKernel.setArg<cl::Buffer>(0, data.getDeviceBuffer());
-    copyToBucketsKernel.setArg<cl::Buffer>(1, buckets.getDeviceBuffer());
+    copyToBucketsKernel.setArg<MTL::Buffer>(0, data.getDeviceBuffer());
+    copyToBucketsKernel.setArg<MTL::Buffer>(1, buckets.getDeviceBuffer());
     copyToBucketsKernel.setArg<cl_int>(2, data.getSize());
-    copyToBucketsKernel.setArg<cl::Buffer>(3, bucketOffset.getDeviceBuffer());
-    copyToBucketsKernel.setArg<cl::Buffer>(4, bucketOfElement.getDeviceBuffer());
-    copyToBucketsKernel.setArg<cl::Buffer>(5, offsetInBucket.getDeviceBuffer());
+    copyToBucketsKernel.setArg<MTL::Buffer>(3, bucketOffset.getDeviceBuffer());
+    copyToBucketsKernel.setArg<MTL::Buffer>(4, bucketOfElement.getDeviceBuffer());
+    copyToBucketsKernel.setArg<MTL::Buffer>(5, offsetInBucket.getDeviceBuffer());
     context.executeKernel(copyToBucketsKernel, data.getSize());
 
     // Sort each bucket.
 
-    sortBucketsKernel.setArg<cl::Buffer>(0, data.getDeviceBuffer());
-    sortBucketsKernel.setArg<cl::Buffer>(1, buckets.getDeviceBuffer());
+    sortBucketsKernel.setArg<MTL::Buffer>(0, data.getDeviceBuffer());
+    sortBucketsKernel.setArg<MTL::Buffer>(1, buckets.getDeviceBuffer());
     sortBucketsKernel.setArg<cl_int>(2, numBuckets);
-    sortBucketsKernel.setArg<cl::Buffer>(3, bucketOffset.getDeviceBuffer());
+    sortBucketsKernel.setArg<MTL::Buffer>(3, bucketOffset.getDeviceBuffer());
     sortBucketsKernel.setArg(4, sortKernelSize*trait->getDataSize(), NULL);
     context.executeKernel(sortBucketsKernel, ((data.getSize()+sortKernelSize-1)/sortKernelSize)*sortKernelSize, sortKernelSize);
 }

@@ -144,9 +144,9 @@ void OpenCLParallelCalcForcesAndEnergyKernel::beginComputation(ContextImpl& cont
         contextForces.initialize<mm_float4>(cl0, &cl0.getForceBuffers().getDeviceBuffer(),
                 data.contexts.size()*cl0.getPaddedNumAtoms(), "contextForces");
         int bufferBytes = (data.contexts.size()-1)*cl0.getPaddedNumAtoms()*elementSize;
-        pinnedPositionBuffer = new cl::Buffer(cl0.getContext(), CL_MEM_ALLOC_HOST_PTR, bufferBytes);
+        pinnedPositionBuffer = NS::TransferPtr(MTL::Buffer(cl0.getContext(), CL_MEM_ALLOC_HOST_PTR, bufferBytes));
         pinnedPositionMemory = cl0.getQueue().enqueueMapBuffer(*pinnedPositionBuffer, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, bufferBytes);
-        pinnedForceBuffer = new cl::Buffer(cl0.getContext(), CL_MEM_ALLOC_HOST_PTR, bufferBytes);
+        pinnedForceBuffer = NS::TransferPtr(MTL::Buffer(cl0.getContext(), CL_MEM_ALLOC_HOST_PTR, bufferBytes));
         pinnedForceMemory = cl0.getQueue().enqueueMapBuffer(*pinnedForceBuffer, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0, bufferBytes);
     }
 

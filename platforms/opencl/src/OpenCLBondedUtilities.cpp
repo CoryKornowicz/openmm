@@ -50,7 +50,7 @@ void OpenCLBondedUtilities::addInteraction(const vector<vector<int> >& atoms, co
     }
 }
 
-string OpenCLBondedUtilities::addArgument(cl::Memory& data, const string& type) {
+string OpenCLBondedUtilities::addArgument(MTL::Buffer* data, const string& type) {
     arguments.push_back(&data);
     argTypes.push_back(type);
     return "customArg"+context.intToString(arguments.size());
@@ -131,8 +131,8 @@ void OpenCLBondedUtilities::initialize(const System& system) {
     s<<"}\n";
     map<string, string> defines;
     defines["PADDED_NUM_ATOMS"] = context.intToString(context.getPaddedNumAtoms());
-    cl::Program program = context.createProgram(s.str(), defines);
-    kernel = cl::Kernel(program, "computeBondedForces");
+    auto program = NS::TransferPtr(context.createProgram(s.str(), defines));
+    kernel = NS::TransferPtr(MTL::ComputePipelineState(program, "computeBondedForces"));
     forceAtoms.clear();
     forceSource.clear();
 }
@@ -180,16 +180,16 @@ void OpenCLBondedUtilities::computeInteractions(int groups) {
     if (!hasInitializedKernels) {
         hasInitializedKernels = true;
         int index = 0;
-        kernel.setArg<cl::Buffer>(index++, context.getLongForceBuffer().getDeviceBuffer());
-        kernel.setArg<cl::Buffer>(index++, context.getEnergyBuffer().getDeviceBuffer());
-        kernel.setArg<cl::Buffer>(index++, context.getPosq().getDeviceBuffer());
+        kernel.setArg<MTL::Buffer>(index++, context.getLongForceBuffer().getDeviceBuffer());
+        kernel.setArg<MTL::Buffer>(index++, context.getEnergyBuffer().getDeviceBuffer());
+        kernel.setArg<MTL::Buffer>(index++, context.getPosq().getDeviceBuffer());
         index += 6;
         for (int j = 0; j < (int) atomIndices.size(); j++)
-            kernel.setArg<cl::Buffer>(index++, atomIndices[j].getDeviceBuffer());
+            kernel.setArg<MTL::Buffer>(index++, atomIndices[j].getDeviceBuffer());
         for (int j = 0; j < (int) arguments.size(); j++)
-            kernel.setArg<cl::Memory>(index++, *arguments[j]);
+            kernel.setArg<MTL::Buffer>(index++, *arguments[j]);
         if (energyParameterDerivatives.size() > 0)
-            kernel.setArg<cl::Memory>(index++, context.getEnergyParamDerivBuffer().getDeviceBuffer());
+            kernel.setArg<MTL::Buffer>(index++, context.getEnergyParamDerivBuffer().getDeviceBuffer());
     }
     kernel.setArg<cl_int>(3, groups);
     if (context.getUseDoublePrecision()) {

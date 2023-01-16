@@ -136,24 +136,13 @@ bool OpenCLPlatform::isPlatformSupported() {
     if (sscanf(str, "%d.%d.%d", &major, &minor, &micro) != 3)
         return false;
 
-    if (major < 14 || (major == 14 && minor < 3))
-        // 14.3.0 is the darwin release corresponding to OS X 10.10.3. Versions prior to that
-        // contained a number of serious bugs in the Apple OpenCL libraries.
-        // (See https://github.com/SimTk/openmm/issues/395 for example.)
+    if (major < 22)
+        // We assume you're on macOS Ventura and running Metal 3.
         return false;
+#else
+#error "The OpenMM Metal port only runs on Apple platforms."
 #endif
 
-    // Make sure at least one OpenCL implementation is installed.
-
-    std::vector<cl::Platform> platforms;
-    try {
-        cl::Platform::get(&platforms);
-        if (platforms.size() == 0)
-            return false;
-    }
-    catch (...) {
-        return false;
-    }
     return true;
 }
 

@@ -59,22 +59,31 @@ OpenCLNonbondedUtilities::OpenCLNonbondedUtilities(OpenCLContext& context) : con
         blockSorter(NULL), pinnedCountBuffer(NULL), pinnedCountMemory(NULL), forceRebuildNeighborList(true), lastCutoff(0.0), groupFlags(0) {
     // Decide how many thread blocks and force buffers to use.
 
-    deviceIsCpu = (context.getDevice().getInfo<CL_DEVICE_TYPE>() == CL_DEVICE_TYPE_CPU);
-    if (deviceIsCpu) {
-        numForceThreadBlocks = context.getNumThreadBlocks();
-        forceThreadBlockSize = 1;
-    }
-    else if (context.getSIMDWidth() == 32) {
-            numForceThreadBlocks = 4*context.getDevice().getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
-            forceThreadBlockSize = 256;
+    if (context.getSIMDWidth() == 32) {
+        #if defined(__aarch64__)
+        // TODO: Profile whether to change this number. M1 technically supports
+        // 12=3072/256 threadgroups, but we want to stay conservative. Some
+        // unrelated work showed 88 simds (11 threadgroups) being optimal, but
+        // register pressure might mean we're oversubscribing.
+        //
+        // We must assert that every compute pipeline supports 1024 threads per
+        // threadgroup (2048 per core), otherwise this is too high.
+        int64_t multiplier = 8;
+        #else
+        int64_t multiplier = 4;
+        #endif
+        numForceThreadBlocks = multiplier*context.getInfoDevice().getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
+        forceThreadBlockSize = 256;
     }
     else {
         numForceThreadBlocks = context.getNumThreadBlocks();
         forceThreadBlockSize = (context.getSIMDWidth() >= 32 ? OpenCLContext::ThreadBlockSize : 32);
     }
-    pinnedCountBuffer = new cl::Buffer(context.getContext(), CL_MEM_ALLOC_HOST_PTR, sizeof(unsigned int));
-    pinnedCountMemory = (unsigned int*) context.getQueue().enqueueMapBuffer(*pinnedCountBuffer, CL_TRUE, CL_MAP_READ, 0, sizeof(int));
-    setKernelSource(deviceIsCpu ? OpenCLKernelSources::nonbonded_cpu : OpenCLKernelSources::nonbonded);
+    pinnedCountBuffer = new OpenCLArray();
+    pinnedCountBuffer.initialize<unsigned int>(
+        context, 1, "Pinned Count Buffer", MTL::ResourceStorageModeManaged);
+    pinnedCountMemory = pinnedCountBuffer->getDeviceBuffer()->contents();
+    setKernelSource(OpenCLKernelSources::nonbonded);
 }
 
 OpenCLNonbondedUtilities::~OpenCLNonbondedUtilities() {
@@ -295,9 +304,10 @@ void OpenCLNonbondedUtilities::initialize(const System& system) {
     }
 }
 
-static void setPeriodicBoxArgs(OpenCLContext& cl, cl::Kernel& kernel, int index) {
+// TODO: Pointer or reference?
+static void setPeriodicBoxArgs(OpenCLContext& cl, OpenCLKernel& kernel, int index) {
     if (cl.getUseDoublePrecision()) {
-        kernel.setArg<mm_double4>(index++, cl.getPeriodicBoxSizeDouble());
+        kernel->setArg<mm_double4>(index++, cl.getPeriodicBoxSizeDouble());
         kernel.setArg<mm_double4>(index++, cl.getInvPeriodicBoxSizeDouble());
         kernel.setArg<mm_double4>(index++, cl.getPeriodicBoxVecXDouble());
         kernel.setArg<mm_double4>(index++, cl.getPeriodicBoxVecYDouble());
@@ -362,7 +372,7 @@ void OpenCLNonbondedUtilities::computeInteractions(int forceGroups, bool include
         return;
     KernelSet& kernels = groupKernels[forceGroups];
     if (kernels.hasForces) {
-        cl::Kernel& kernel = (includeForces ? (includeEnergy ? kernels.forceEnergyKernel : kernels.forceKernel) : kernels.energyKernel);
+        OpenCLKernel* kernel = (includeForces ? (includeEnergy ? &kernels.forceEnergyKernel : &kernels.forceKernel) : &kernels.energyKernel);
         if (*reinterpret_cast<cl_kernel*>(&kernel) == NULL)
             kernel = createInteractionKernel(kernels.source, parameters, arguments, true, true, forceGroups, includeForces, includeEnergy);
         if (useCutoff)
@@ -398,22 +408,22 @@ bool OpenCLNonbondedUtilities::updateNeighborListSize() {
     for (map<int, KernelSet>::iterator iter = groupKernels.begin(); iter != groupKernels.end(); ++iter) {
         KernelSet& kernels = iter->second;
         if (*reinterpret_cast<cl_kernel*>(&kernels.forceKernel) != NULL) {
-            kernels.forceKernel.setArg<cl::Buffer>(7, interactingTiles.getDeviceBuffer());
+            kernels.forceKernel.setArg<MTL::Buffer>(7, interactingTiles.getDeviceBuffer());
             kernels.forceKernel.setArg<cl_uint>(14, maxTiles);
-            kernels.forceKernel.setArg<cl::Buffer>(17, interactingAtoms.getDeviceBuffer());
+            kernels.forceKernel.setArg<MTL::Buffer>(17, interactingAtoms.getDeviceBuffer());
         }
         if (*reinterpret_cast<cl_kernel*>(&kernels.energyKernel) != NULL) {
-            kernels.energyKernel.setArg<cl::Buffer>(7, interactingTiles.getDeviceBuffer());
+            kernels.energyKernel.setArg<MTL::Buffer>(7, interactingTiles.getDeviceBuffer());
             kernels.energyKernel.setArg<cl_uint>(14, maxTiles);
-            kernels.energyKernel.setArg<cl::Buffer>(17, interactingAtoms.getDeviceBuffer());
+            kernels.energyKernel.setArg<MTL::Buffer>(17, interactingAtoms.getDeviceBuffer());
         }
         if (*reinterpret_cast<cl_kernel*>(&kernels.forceEnergyKernel) != NULL) {
-            kernels.forceEnergyKernel.setArg<cl::Buffer>(7, interactingTiles.getDeviceBuffer());
+            kernels.forceEnergyKernel.setArg<MTL::Buffer>(7, interactingTiles.getDeviceBuffer());
             kernels.forceEnergyKernel.setArg<cl_uint>(14, maxTiles);
-            kernels.forceEnergyKernel.setArg<cl::Buffer>(17, interactingAtoms.getDeviceBuffer());
+            kernels.forceEnergyKernel.setArg<MTL::Buffer>(17, interactingAtoms.getDeviceBuffer());
         }
-        kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(6, interactingTiles.getDeviceBuffer());
-        kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(7, interactingAtoms.getDeviceBuffer());
+        kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(6, interactingTiles.getDeviceBuffer());
+        kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(7, interactingAtoms.getDeviceBuffer());
         kernels.findInteractingBlocksKernel.setArg<cl_uint>(9, maxTiles);
     }
     forceRebuildNeighborList = true;
@@ -490,40 +500,40 @@ void OpenCLNonbondedUtilities::createKernelsForGroups(int groups) {
         int groupSize = (deviceIsCpu || context.getSIMDWidth() < 32 ? 32 : 256);
         while (true) {
             defines["GROUP_SIZE"] = context.intToString(groupSize);
-            cl::Program interactingBlocksProgram = context.createProgram(file, defines);
-            kernels.findBlockBoundsKernel = cl::Kernel(interactingBlocksProgram, "findBlockBounds");
+            auto interactingBlocksProgram = NS::TransferPtr(context.createProgram(file, defines));
+            kernels.findBlockBoundsKernel = NS::TransferPtr(MTL::ComputePipelineState(interactingBlocksProgram, "findBlockBounds"));
             kernels.findBlockBoundsKernel.setArg<cl_int>(0, context.getNumAtoms());
-            kernels.findBlockBoundsKernel.setArg<cl::Buffer>(6, context.getPosq().getDeviceBuffer());
-            kernels.findBlockBoundsKernel.setArg<cl::Buffer>(7, blockCenter.getDeviceBuffer());
-            kernels.findBlockBoundsKernel.setArg<cl::Buffer>(8, blockBoundingBox.getDeviceBuffer());
-            kernels.findBlockBoundsKernel.setArg<cl::Buffer>(9, rebuildNeighborList.getDeviceBuffer());
-            kernels.findBlockBoundsKernel.setArg<cl::Buffer>(10, sortedBlocks.getDeviceBuffer());
-            kernels.sortBoxDataKernel = cl::Kernel(interactingBlocksProgram, "sortBoxData");
-            kernels.sortBoxDataKernel.setArg<cl::Buffer>(0, sortedBlocks.getDeviceBuffer());
-            kernels.sortBoxDataKernel.setArg<cl::Buffer>(1, blockCenter.getDeviceBuffer());
-            kernels.sortBoxDataKernel.setArg<cl::Buffer>(2, blockBoundingBox.getDeviceBuffer());
-            kernels.sortBoxDataKernel.setArg<cl::Buffer>(3, sortedBlockCenter.getDeviceBuffer());
-            kernels.sortBoxDataKernel.setArg<cl::Buffer>(4, sortedBlockBoundingBox.getDeviceBuffer());
-            kernels.sortBoxDataKernel.setArg<cl::Buffer>(5, context.getPosq().getDeviceBuffer());
-            kernels.sortBoxDataKernel.setArg<cl::Buffer>(6, oldPositions.getDeviceBuffer());
-            kernels.sortBoxDataKernel.setArg<cl::Buffer>(7, interactionCount.getDeviceBuffer());
-            kernels.sortBoxDataKernel.setArg<cl::Buffer>(8, rebuildNeighborList.getDeviceBuffer());
+            kernels.findBlockBoundsKernel.setArg<MTL::Buffer>(6, context.getPosq().getDeviceBuffer());
+            kernels.findBlockBoundsKernel.setArg<MTL::Buffer>(7, blockCenter.getDeviceBuffer());
+            kernels.findBlockBoundsKernel.setArg<MTL::Buffer>(8, blockBoundingBox.getDeviceBuffer());
+            kernels.findBlockBoundsKernel.setArg<MTL::Buffer>(9, rebuildNeighborList.getDeviceBuffer());
+            kernels.findBlockBoundsKernel.setArg<MTL::Buffer>(10, sortedBlocks.getDeviceBuffer());
+            kernels.sortBoxDataKernel = NS::TransferPtr(MTL::ComputePipelineState(interactingBlocksProgram, "sortBoxData"));
+            kernels.sortBoxDataKernel.setArg<MTL::Buffer>(0, sortedBlocks.getDeviceBuffer());
+            kernels.sortBoxDataKernel.setArg<MTL::Buffer>(1, blockCenter.getDeviceBuffer());
+            kernels.sortBoxDataKernel.setArg<MTL::Buffer>(2, blockBoundingBox.getDeviceBuffer());
+            kernels.sortBoxDataKernel.setArg<MTL::Buffer>(3, sortedBlockCenter.getDeviceBuffer());
+            kernels.sortBoxDataKernel.setArg<MTL::Buffer>(4, sortedBlockBoundingBox.getDeviceBuffer());
+            kernels.sortBoxDataKernel.setArg<MTL::Buffer>(5, context.getPosq().getDeviceBuffer());
+            kernels.sortBoxDataKernel.setArg<MTL::Buffer>(6, oldPositions.getDeviceBuffer());
+            kernels.sortBoxDataKernel.setArg<MTL::Buffer>(7, interactionCount.getDeviceBuffer());
+            kernels.sortBoxDataKernel.setArg<MTL::Buffer>(8, rebuildNeighborList.getDeviceBuffer());
             kernels.sortBoxDataKernel.setArg<cl_int>(9, true);
-            kernels.findInteractingBlocksKernel = cl::Kernel(interactingBlocksProgram, "findBlocksWithInteractions");
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(5, interactionCount.getDeviceBuffer());
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(6, interactingTiles.getDeviceBuffer());
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(7, interactingAtoms.getDeviceBuffer());
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(8, context.getPosq().getDeviceBuffer());
+            kernels.findInteractingBlocksKernel = NS::TransferPtr(MTL::ComputePipelineState(interactingBlocksProgram, "findBlocksWithInteractions"));
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(5, interactionCount.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(6, interactingTiles.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(7, interactingAtoms.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(8, context.getPosq().getDeviceBuffer());
             kernels.findInteractingBlocksKernel.setArg<cl_uint>(9, interactingTiles.getSize());
             kernels.findInteractingBlocksKernel.setArg<cl_uint>(10, startBlockIndex);
             kernels.findInteractingBlocksKernel.setArg<cl_uint>(11, numBlocks);
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(12, sortedBlocks.getDeviceBuffer());
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(13, sortedBlockCenter.getDeviceBuffer());
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(14, sortedBlockBoundingBox.getDeviceBuffer());
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(15, exclusionIndices.getDeviceBuffer());
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(16, exclusionRowIndices.getDeviceBuffer());
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(17, oldPositions.getDeviceBuffer());
-            kernels.findInteractingBlocksKernel.setArg<cl::Buffer>(18, rebuildNeighborList.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(12, sortedBlocks.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(13, sortedBlockCenter.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(14, sortedBlockBoundingBox.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(15, exclusionIndices.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(16, exclusionRowIndices.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(17, oldPositions.getDeviceBuffer());
+            kernels.findInteractingBlocksKernel.setArg<MTL::Buffer>(18, rebuildNeighborList.getDeviceBuffer());
             if (kernels.findInteractingBlocksKernel.getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(context.getDevice()) < groupSize) {
                 // The device can't handle this block size, so reduce it.
 
@@ -539,7 +549,7 @@ void OpenCLNonbondedUtilities::createKernelsForGroups(int groups) {
     groupKernels[groups] = kernels;
 }
 
-cl::Kernel OpenCLNonbondedUtilities::createInteractionKernel(const string& source, const vector<ParameterInfo>& params, const vector<ParameterInfo>& arguments, bool useExclusions, bool isSymmetric, int groups, bool includeForces, bool includeEnergy) {
+OpenCLKernel OpenCLNonbondedUtilities::createInteractionKernel(const string& source, const vector<ParameterInfo>& params, const vector<ParameterInfo>& arguments, bool useExclusions, bool isSymmetric, int groups, bool includeForces, bool includeEnergy) {
     map<string, string> replacements;
     replacements["COMPUTE_INTERACTION"] = source;
     const string suffixes[] = {"x", "y", "z", "w"};
@@ -701,34 +711,34 @@ cl::Kernel OpenCLNonbondedUtilities::createInteractionKernel(const string& sourc
     defines["LAST_EXCLUSION_TILE"] = context.intToString(endExclusionIndex);
     if ((localDataSize/4)%2 == 0)
         defines["PARAMETER_SIZE_IS_EVEN"] = "1";
-    cl::Program program = context.createProgram(context.replaceStrings(kernelSource, replacements), defines);
-    cl::Kernel kernel(program, "computeNonbonded");
+    auto program = NS::TransferPtr(context.createProgram(context.replaceStrings(kernelSource, replacements), defines));
+    auto kernel = MTL::ComputePipelineState(program, "computeNonbonded");
 
     // Set arguments to the Kernel.
 
     int index = 0;
-    kernel.setArg<cl::Memory>(index++, context.getLongForceBuffer().getDeviceBuffer());
-    kernel.setArg<cl::Buffer>(index++, context.getEnergyBuffer().getDeviceBuffer());
-    kernel.setArg<cl::Buffer>(index++, context.getPosq().getDeviceBuffer());
-    kernel.setArg<cl::Buffer>(index++, exclusions.getDeviceBuffer());
-    kernel.setArg<cl::Buffer>(index++, exclusionTiles.getDeviceBuffer());
+    kernel.setArg<MTL::Buffer>(index++, context.getLongForceBuffer().getDeviceBuffer());
+    kernel.setArg<MTL::Buffer>(index++, context.getEnergyBuffer().getDeviceBuffer());
+    kernel.setArg<MTL::Buffer>(index++, context.getPosq().getDeviceBuffer());
+    kernel.setArg<MTL::Buffer>(index++, exclusions.getDeviceBuffer());
+    kernel.setArg<MTL::Buffer>(index++, exclusionTiles.getDeviceBuffer());
     kernel.setArg<cl_uint>(index++, startTileIndex);
     kernel.setArg<cl_ulong>(index++, numTiles);
     if (useCutoff) {
-        kernel.setArg<cl::Buffer>(index++, interactingTiles.getDeviceBuffer());
-        kernel.setArg<cl::Buffer>(index++, interactionCount.getDeviceBuffer());
+        kernel.setArg<MTL::Buffer>(index++, interactingTiles.getDeviceBuffer());
+        kernel.setArg<MTL::Buffer>(index++, interactionCount.getDeviceBuffer());
         index += 5; // The periodic box size arguments are set when the kernel is executed.
         kernel.setArg<cl_uint>(index++, interactingTiles.getSize());
-        kernel.setArg<cl::Buffer>(index++, blockCenter.getDeviceBuffer());
-        kernel.setArg<cl::Buffer>(index++, blockBoundingBox.getDeviceBuffer());
-        kernel.setArg<cl::Buffer>(index++, interactingAtoms.getDeviceBuffer());
+        kernel.setArg<MTL::Buffer>(index++, blockCenter.getDeviceBuffer());
+        kernel.setArg<MTL::Buffer>(index++, blockBoundingBox.getDeviceBuffer());
+        kernel.setArg<MTL::Buffer>(index++, interactingAtoms.getDeviceBuffer());
     }
     for (const ParameterInfo& param : params)
-        kernel.setArg<cl::Memory>(index++, param.getMemory());
+        kernel.setArg<MTL::Buffer>(index++, param.getMemory());
     for (const ParameterInfo& arg : arguments)
-        kernel.setArg<cl::Memory>(index++, arg.getMemory());
+        kernel.setArg<MTL::Buffer>(index++, arg.getMemory());
     if (energyParameterDerivatives.size() > 0)
-        kernel.setArg<cl::Memory>(index++, context.getEnergyParamDerivBuffer().getDeviceBuffer());
+        kernel.setArg<MTL::Buffer>(index++, context.getEnergyParamDerivBuffer().getDeviceBuffer());
     return kernel;
 }
 

@@ -103,7 +103,7 @@ public:
      * @return the name that will be used for the argument.  Any code you pass to addInteraction() should
      * refer to it by this name.
      */
-    std::string addArgument(cl::Memory& data, const std::string& type);
+    std::string addArgument(MTL::Buffer* data, const std::string& type);
     /**
      * Add an argument that should be passed to the interaction kernel.
      * 
@@ -142,12 +142,12 @@ public:
 private:
     std::string createForceSource(int forceIndex, int numBonds, int numAtoms, int group, const std::string& computeForce);
     OpenCLContext& context;
-    cl::Kernel kernel;
+    OpenCLKernel kernel;
     std::vector<std::vector<std::vector<int> > > forceAtoms;
     std::vector<int> indexWidth;
     std::vector<std::string> forceSource;
     std::vector<int> forceGroup;
-    std::vector<cl::Memory*> arguments;
+    std::vector<NS::SharedPtr<MTLBuffer>> arguments;
     std::vector<std::string> argTypes;
     std::vector<OpenCLArray> atomIndices;
     std::vector<std::string> prefixCode;

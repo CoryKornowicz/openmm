@@ -46,7 +46,7 @@ public:
      * @param context      the context this kernel belongs to
      * @param kernel       the kernel to be invoked
      */
-    OpenCLKernel(OpenCLContext& context, cl::Kernel kernel);
+    OpenCLKernel(OpenCLContext& context, MTL::ComputePipelineState* kernel);
     /**
      * Get the name of this kernel.
      */
@@ -100,9 +100,13 @@ protected:
      */
     void setPrimitiveArg(int index, const void* value, int size);
 private:
+    struct Argument {
+        OpenCLArray* maybeArray;
+        std::vector<uint8_t> maybePrimitive;
+    }
     OpenCLContext& context;
-    cl::Kernel kernel;
-    std::vector<OpenCLArray*> arrayArgs;
+    NS::SharedPtr<MTL::ComputePipelineState> pipeline;
+    std::vector<Argument> arrayArgs;
 };
 
 } // namespace OpenMM

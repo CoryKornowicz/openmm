@@ -2,6 +2,8 @@ real2 multiplyComplex(real2 c1, real2 c2) {
     return (real2) (c1.x*c2.x-c1.y*c2.y, c1.x*c2.y+c1.y*c2.x);
 }
 
+// TODO: Migrate all of this to VkFFT for better performance.
+
 /**
  * Load a value from the half-complex grid produces by a real-to-complex transform.
  */

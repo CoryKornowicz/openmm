@@ -86,8 +86,8 @@ private:
     std::vector<double> contextNonbondedFractions;
     std::vector<int> tileCounts;
     OpenCLArray contextForces;
-    cl::Buffer* pinnedPositionBuffer;
-    cl::Buffer* pinnedForceBuffer;
+    OpenCLArray pinnedPositionBuffer;
+    OpenCLArray pinnedForceBuffer;
     void* pinnedPositionMemory;
     void* pinnedForceMemory;
 };

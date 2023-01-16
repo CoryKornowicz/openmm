@@ -86,14 +86,14 @@ public:
      */
     static int findLegalDimension(int minimum);
 private:
-    cl::Kernel createKernel(int xsize, int ysize, int zsize, int& threads, int axis, bool forward, bool inputIsReal);
+    OpenCLKernel createKernel(int xsize, int ysize, int zsize, int& threads, int axis, bool forward, bool inputIsReal);
     int xsize, ysize, zsize;
     int xthreads, ythreads, zthreads;
     bool packRealAsComplex;
     OpenCLContext& context;
-    cl::Kernel xkernel, ykernel, zkernel;
-    cl::Kernel invxkernel, invykernel, invzkernel;
-    cl::Kernel packForwardKernel, unpackForwardKernel, packBackwardKernel, unpackBackwardKernel;
+    OpenCLKernel xkernel, ykernel, zkernel;
+    OpenCLKernel invxkernel, invykernel, invzkernel;
+    OpenCLKernel packForwardKernel, unpackForwardKernel, packBackwardKernel, unpackBackwardKernel;
 };
 
 } // namespace OpenMM

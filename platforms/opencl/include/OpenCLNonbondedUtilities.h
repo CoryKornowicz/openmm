@@ -289,7 +289,7 @@ public:
      * @param includeForces whether this kernel should compute forces
      * @param includeEnergy whether this kernel should compute potential energy
      */
-    cl::Kernel createInteractionKernel(const std::string& source, const std::vector<ParameterInfo>& params, const std::vector<ParameterInfo>& arguments, bool useExclusions, bool isSymmetric, int groups, bool includeForces, bool includeEnergy);
+    OpenCLKernel createInteractionKernel(const std::string& source, const std::vector<ParameterInfo>& params, const std::vector<ParameterInfo>& arguments, bool useExclusions, bool isSymmetric, int groups, bool includeForces, bool includeEnergy);
     /**
      * Create the set of kernels that will be needed for a particular combination of force groups.
      * 
@@ -321,7 +321,7 @@ private:
     OpenCLArray rebuildNeighborList;
     OpenCLSort* blockSorter;
     cl::Event downloadCountEvent;
-    cl::Buffer* pinnedCountBuffer;
+    OpenCLArray pinnedCountBuffer;
     unsigned int* pinnedCountMemory;
     std::vector<std::vector<int> > atomExclusions;
     std::vector<ParameterInfo> parameters;
@@ -347,11 +347,11 @@ public:
     bool hasForces;
     double cutoffDistance;
     std::string source;
-    cl::Kernel forceKernel, energyKernel, forceEnergyKernel;
-    cl::Kernel findBlockBoundsKernel;
-    cl::Kernel sortBoxDataKernel;
-    cl::Kernel findInteractingBlocksKernel;
-    cl::Kernel findInteractionsWithinBlocksKernel;
+    OpenCLKernel forceKernel, energyKernel, forceEnergyKernel;
+    OpenCLKernel findBlockBoundsKernel;
+    OpenCLKernel sortBoxDataKernel;
+    OpenCLKernel findInteractingBlocksKernel;
+    OpenCLKernel findInteractionsWithinBlocksKernel;
 };
 
 /**
@@ -370,7 +370,7 @@ public:
      * @param memory         the memory containing the parameter values
      * @param constant       whether the memory should be marked as constant
      */
-    ParameterInfo(const std::string& name, const std::string& componentType, int numComponents, int size, cl::Memory& memory, bool constant=true) :
+    ParameterInfo(const std::string& name, const std::string& componentType, int numComponents, int size, MTL::Buffer* memory, bool constant=true) :
             name(name), componentType(componentType), numComponents(numComponents), size(size), memory(&memory), constant(constant) {
         if (numComponents == 1)
             type = componentType;
@@ -395,7 +395,7 @@ public:
     int getSize() const {
         return size;
     }
-    cl::Memory& getMemory() const {
+    MTL::Buffer* getMemory() const {
         return *memory;
     }
     bool isConstant() const {
@@ -406,7 +406,7 @@ private:
     std::string componentType;
     std::string type;
     int size, numComponents;
-    cl::Memory* memory;
+    OpenCLArray memory;
     bool constant;
 };
 

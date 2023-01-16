@@ -22,6 +22,9 @@ CMAKE_FLAGS+=" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9"
 CMAKE_FLAGS+=" -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.11.sdk"
 CMAKE_FLAGS+=" -DOPENMM_GENERATE_API_DOCS=ON"
 
+# TODO: Use https://gist.github.com/giraphics/38c633af457034af0a9aaa4c76256efc
+# to debug Metal API.
+
 # Build in subdirectory.
 if [ -e build ]; then
     rm -rf build

@@ -30,10 +30,43 @@
 using namespace OpenMM;
 using namespace std;
 
-OpenCLProgram::OpenCLProgram(OpenCLContext& context, cl::Program program) : context(context), program(program) {
+OpenCLProgram::OpenCLProgram(OpenCLContext& context, MTL::Library* program) : context(context) {
+    this->program = NS::TransferPtr(program);
 }
 
 ComputeKernel OpenCLProgram::createKernel(const string& name) {
-    cl::Kernel kernel = cl::Kernel(program, name.c_str());
-    return shared_ptr<ComputeKernelImpl>(new OpenCLKernel(context, kernel));
+    NS::Error* error;
+    auto ns_name = NS::String::string(name.c_str(), NS::UTF8StringEncoding);
+    auto function = NS::TransferPtr(program->newFunction(ns_name, &error));
+    if (error) {
+        const char* error_description =
+            error->localizedDescription()->cString(NS::UTF8StringEncoding);
+        throw OpenMMException(
+            "Error creating function: " + std::string(error_description));
+    }
+    
+    // Set function name here, so we can recall it later.
+    auto desc = NS::TransferPtr(
+        MTL::ComputePipelineDescriptor::alloc()->init());
+    desc->setLabel(ns_name);
+    desc->setComputeFunction(function.get())
+    desc->setThreadGroupSizeIsMultipleOfThreadExecutionWidth(true);
+    desc->setMaxCallStackDepth(3);
+    
+    MTL::ComputePipelineState* pipeline =
+        device->newComputePipelineState(desc.get(), 0, &error);
+    if (error) {
+        const char* error_description =
+            error->localizedDescription()->cString(NS::UTF8StringEncoding);
+        throw OpenMMException(
+            "Error creating pipeline: " + std::string(error_description));
+    }
+    #if defined(__aarch64__)
+    if (pipeline->maxThreadsPerThreadgroup() < 1024) {
+        // Our assumptions were wrong; adjust the target threadgroup size.
+        throw OpenMMException(
+            "Compute pipeline on M1 with unexpected register pressure.")
+    }
+    #endif
+    return shared_ptr<ComputeKernelImpl>(new OpenCLKernel(context, pipeline));
 }
